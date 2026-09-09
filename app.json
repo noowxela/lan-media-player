@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "musicPlayer",
+    "name": "Music Player",
     "slug": "musicPlayer",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -8,16 +8,35 @@
     "scheme": "musicplayer",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "icon": "./assets/expo.icon"
+      "icon": "./assets/expo.icon",
+      "bundleIdentifier": "com.alexwoon.musicplayer",
+      "infoPlist": {
+        "NSLocalNetworkUsageDescription": "This app uses the local network to send and receive MP3 files on the same Wi-Fi.",
+        "NSAppTransportSecurity": {
+          "NSAllowsLocalNetworking": true
+        },
+        "UIBackgroundModes": ["audio"],
+        "UIFileSharingEnabled": true,
+        "LSSupportsOpeningDocumentsInPlace": true,
+        "NSPhotoLibraryUsageDescription": "This app reads and deletes photos and videos in your library when you share them over Wi-Fi."
+      }
     },
     "android": {
+      "package": "com.alexwoon.musicplayer",
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
+        "backgroundColor": "#111114",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "usesCleartextTraffic": true,
+      "permissions": [
+        "android.permission.INTERNET",
+        "android.permission.ACCESS_NETWORK_STATE",
+        "android.permission.ACCESS_WIFI_STATE",
+        "android.permission.CHANGE_WIFI_MULTICAST_STATE"
+      ]
     },
     "web": {
       "output": "static",
@@ -28,9 +47,33 @@
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#208AEF",
+          "backgroundColor": "#111114",
           "image": "./assets/images/splash-icon.png",
           "imageWidth": 76
+        }
+      ],
+      [
+        "expo-audio",
+        {
+          "enableBackgroundPlayback": true,
+          "microphonePermission": false,
+          "recordAudioAndroid": false
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow Music Player to scan QR codes to join a Wi-Fi transfer.",
+          "recordAudioAndroid": false,
+          "microphonePermission": false
+        }
+      ],
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "This app reads and deletes photos and videos in your library when you share them over Wi-Fi.",
+          "savePhotosPermission": false,
+          "granularPermissions": ["photo", "video"]
         }
       ]
     ],

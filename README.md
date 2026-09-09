@@ -1,56 +1,47 @@
-# Welcome to your Expo app 👋
+# Music Player
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+Expo iOS app for a local MP3 library, background playback, and same-Wi-Fi transfer. A phone can host an HTTP share on port **8765**; a computer opens the link in a browser, or another phone joins from the Transfer tab.
 
-## Get started
+Expo Go is not enough. Native modules (`react-native-tcp-socket`, `expo-media-library`, camera) need a development build.
 
-1. Install dependencies
+## Features
 
-   ```bash
-   npm install
-   ```
+- **Library** — import MP3s, play, multi-select, delete
+- **Now Playing** — seek, prev / pause / next, loop, lock-screen audio
+- **Transfer (host)** — QR + PIN, connected devices, Accept / Decline / Disconnect
+- **Transfer (join)** — type IP + PIN or scan the host QR, then download tracks
+- **LAN browser page** — Home, Photos, Videos, Music, Documents
+- **Settings** — on-device library folder (Files app on iOS: On My iPhone → Music Player → music)
 
-2. Start the app
+The browser share is PIN-protected. A new computer waits until you Accept on the phone. After you quit the LAN page, reload reconnects that computer without a second prompt. Disconnecting it from the phone requires Accept again.
 
-   ```bash
-   npx expo start
-   ```
-
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
+## Run
 
 ```bash
-npm run reset-project
+npm install
+npx expo run:ios
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+Device:
 
-### Other setup steps
+```bash
+npx expo run:ios --device
+```
 
-- To set up ESLint for linting, run `npx expo lint`, or follow our guide on ["Using ESLint and Prettier"](https://docs.expo.dev/guides/using-eslint/)
-- If you'd like to set up unit testing, follow our guide on ["Unit Testing with Jest"](https://docs.expo.dev/develop/unit-testing/)
-- Learn more about the TypeScript setup in this template in our guide on ["Using TypeScript"](https://docs.expo.dev/guides/typescript/)
+Keep the Metro bundler running. After JS-only LAN HTML changes, reload the app, then **Stop sharing → Start sharing**, and refresh the browser.
 
-## Learn more
+Photos and videos need a native rebuild after adding `expo-media-library` / `expo-video-thumbnails`. Do not add `expo-image-manipulator` or `expo-video-thumbnails` to the `plugins` array in `app.json` (those packages have no config plugin and will crash prebuild).
 
-To learn more about developing your project with Expo, look at the following resources:
+## LAN share
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+1. Same Wi-Fi (not a guest network that isolates clients).
+2. Transfer → Host → **Start sharing**. Allow Photos if you want the gallery.
+3. Keep Transfer open. Open the URL or scan the QR on a computer.
+4. Enter the PIN if the link has none. Tap **Accept** on the phone.
+5. **Stop sharing** drops every browser session.
 
-## Join the community
+PIN changes each time you start sharing.
 
-Join our community of developers creating universal apps.
+## Stack
 
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+Expo SDK 57, Expo Router, `expo-audio`, `react-native-tcp-socket` (LAN HTTP), `expo-media-library` (photos and videos).
