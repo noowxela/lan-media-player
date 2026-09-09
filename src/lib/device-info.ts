@@ -3,6 +3,7 @@ import { Paths } from 'expo-file-system';
 import { Platform } from 'react-native';
 
 import { loadTracks } from '@/lib/library';
+import { countDocuments } from '@/lib/documents';
 import { countPhotos, countVideos } from '@/lib/photos';
 
 export type ShareDeviceInfo = {
@@ -27,7 +28,7 @@ export async function getShareDeviceInfo(): Promise<ShareDeviceInfo> {
   const isIos = Platform.OS === 'ios';
 
   return {
-    name: isIos ? 'iPhone' : Device.modelName || 'Android',
+    name: Device.deviceName || Device.modelName || (isIos ? 'iPhone' : 'Android'),
     os: `${isIos ? 'iOS' : 'Android'} ${Device.osVersion ?? ''}`.trim(),
     totalBytes,
     freeBytes,
@@ -36,7 +37,7 @@ export async function getShareDeviceInfo(): Promise<ShareDeviceInfo> {
       photos: await countPhotos(),
       videos: await countVideos(),
       music: tracks.length,
-      documents: 0,
+      documents: countDocuments(),
     },
   };
 }

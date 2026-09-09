@@ -14,6 +14,13 @@ import {
   resetLanAccess,
 } from '@/lib/lan-access';
 import { getShareDeviceInfo } from '@/lib/device-info';
+import {
+  addDocumentFromBytes,
+  contentTypeForFilename,
+  deleteDocuments,
+  getDocumentFile,
+  listDocuments,
+} from '@/lib/documents';
 import { FAVICON_SVG, getFaviconPng } from '@/lib/favicon';
 import {
   addTrackFromBytes,
@@ -566,8 +573,105 @@ async function handleRequest(request: ParsedRequest, pin: string, clientIp: stri
     }
     const single = request.query.get('filename');
     if (single) filenames.push(decodeFilenameParam(single));
-    await deleteTracksByFilenames(filenames);
-    return httpResponse(200, 'OK', { 'Content-Type': 'application/json' }, JSON.stringify({ ok: true }));
+    const deleted = await deleteTracksByFilenames(filenames);
+    return httpResponse(
+      200,
+      'OK',
+      { 'Content-Type': 'application/json' },
+      JSON.stringify({ ok: deleted > 0, deleted }),
+    );
+  }
+
+  if (pathname === '/api/documents' && request.method === 'GET') {
+    return httpResponse(
+      200,
+      'OK',
+      { 'Content-Type': 'application/json' },
+      JSON.stringify({ files: listDocuments() }),
+    );
+  }
+
+  if (pathname === '/api/documents/delete' && request.method === 'POST') {
+    let filenames: string[] = [];
+    try {
+      const parsed = JSON.parse(request.body.toString('utf8')) as { filenames?: unknown };
+      if (Array.isArray(parsed.filenames)) {
+        filenames = parsed.filenames.filter((name): name is string => typeof name === 'string');
+      }
+    } catch {
+      filenames = [];
+    }
+    const deleted = deleteDocuments(filenames);
+    return httpResponse(
+      200,
+      'OK',
+      { 'Content-Type': 'application/json' },
+      JSON.stringify({ ok: deleted > 0, deleted }),
+    );
+  }
+
+  if (pathname === '/documents/file' && request.method === 'GET') {
+    const filename = decodeFilenameParam(request.query.get('name') || '').replace(/\\/g, '/').split('/').pop() ?? '';
+    if (!filename || filename.includes('..')) {
+      return httpResponse(400, 'Bad Request', { 'Content-Type': 'text/plain' }, 'Bad filename');
+    }
+    let file;
+    try {
+      file = getDocumentFile(filename);
+    } catch {
+      return httpResponse(400, 'Bad Request', { 'Content-Type': 'text/plain' }, 'Bad filename');
+    }
+    if (!file.exists) {
+      return httpResponse(404, 'Not Found', { 'Content-Type': 'text/plain' }, 'Not found');
+    }
+    const size = file.size || 0;
+    const asDownload = request.query.get('download') === '1';
+    const safeName = file.name.replace(/"/g, '');
+    if (size <= 0) {
+      return httpResponse(
+        200,
+        'OK',
+        {
+          'Content-Type': contentTypeForFilename(file.name),
+          'Content-Disposition': asDownload
+            ? `attachment; filename="${safeName}"; filename*=UTF-8''${encodeURIComponent(file.name)}`
+            : 'inline',
+        },
+        Buffer.alloc(0),
+      );
+    }
+    return {
+      head: httpHead(
+        200,
+        'OK',
+        {
+          'Content-Type': contentTypeForFilename(file.name),
+          'Content-Disposition': asDownload
+            ? `attachment; filename="${safeName}"; filename*=UTF-8''${encodeURIComponent(file.name)}`
+            : 'inline',
+        },
+        size,
+      ),
+      uri: file.uri,
+      start: 0,
+      end: size - 1,
+    };
+  }
+
+  if (pathname === '/documents/upload' && request.method === 'POST') {
+    const encodedName =
+      request.query.get('filename') || headerValue(request.headers, 'x-filename') || 'file';
+    const name = decodeFilenameParam(encodedName);
+    if (request.body.length === 0) {
+      return httpResponse(400, 'Bad Request', { 'Content-Type': 'text/plain' }, 'Empty body');
+    }
+    const stored = await addDocumentFromBytes(name, request.body);
+    return httpResponse(
+      200,
+      'OK',
+      { 'Content-Type': 'application/json' },
+      JSON.stringify({ ok: true, file: stored }),
+    );
   }
 
   if (pathname === '/upload' && request.method === 'POST') {

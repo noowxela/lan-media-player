@@ -36,13 +36,17 @@ export function titleFromFilename(filename: string): string {
   return base.replace(/_+/g, ' ').trim() || 'Untitled';
 }
 
-export function sanitizeFilename(name: string): string {
-  let base = displayNameFromPath(name) || 'track.mp3';
+export function sanitizeStoredFilename(name: string, fallback = 'file'): string {
+  const base = displayNameFromPath(name) || fallback;
   const cleaned = base
     .replace(/[\u0000-\u001f\u007f]/g, '')
     .replace(/[\\/:*?"<>|]+/g, '_')
     .replace(/^\.+/u, '')
     .trim();
-  const withExt = cleaned || 'track.mp3';
+  return cleaned || fallback;
+}
+
+export function sanitizeFilename(name: string): string {
+  const withExt = sanitizeStoredFilename(name, 'track.mp3');
   return withExt.toLowerCase().endsWith('.mp3') ? withExt : `${withExt}.mp3`;
 }

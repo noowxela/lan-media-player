@@ -174,11 +174,13 @@ export async function deleteTrack(id: string): Promise<void> {
   await deleteTracks([id]);
 }
 
-export async function deleteTracksByFilenames(filenames: string[]): Promise<void> {
-  if (filenames.length === 0) return;
+export async function deleteTracksByFilenames(filenames: string[]): Promise<number> {
+  if (filenames.length === 0) return 0;
   const nameSet = new Set(filenames);
   const tracks = await loadTracks();
-  await deleteTracks(tracks.filter((track) => nameSet.has(track.filename)).map((track) => track.id));
+  const ids = tracks.filter((track) => nameSet.has(track.filename)).map((track) => track.id);
+  await deleteTracks(ids);
+  return ids.length;
 }
 
 export async function updateTrackDuration(id: string, duration: number): Promise<void> {

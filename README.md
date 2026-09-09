@@ -10,7 +10,7 @@ Expo Go is not enough. Native modules (`react-native-tcp-socket`, `expo-media-li
 - **Now Playing** — seek, prev / pause / next, loop, lock-screen audio
 - **Transfer (host)** — QR + PIN, connected devices, Accept / Decline / Disconnect
 - **Transfer (join)** — type IP + PIN or scan the host QR, then download tracks
-- **LAN browser page** — Home, Photos, Videos, Music, Documents
+- **LAN browser page** — Home, Photos, Videos, Music, and Documents (files dropped onto the phone)
 - **Settings** — on-device library folder (Files app on iOS: On My iPhone → Music Player → music)
 
 The browser share is PIN-protected. A new computer waits until you Accept on the phone. After you quit the LAN page, reload reconnects that computer without a second prompt. Disconnecting it from the phone requires Accept again.
@@ -40,7 +40,7 @@ Photos and videos need a native rebuild after adding `expo-media-library` / `exp
 4. Enter the PIN if the link has none. Tap **Accept** on the phone.
 5. **Stop sharing** drops every browser session.
 
-PIN changes each time you start sharing.
+PIN changes each time you start sharing. Home drag-and-drop sends MP3s to Music and other files to Documents. Photos and videos come from the phone library (Camera vs Gallery albums). Documents are files stored in the app, not a full Files-app clone of the phone.
 
 ## Stack
 

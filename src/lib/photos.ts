@@ -37,6 +37,7 @@ export type PhotoPage = {
 };
 
 const RECENTS_ID = 'recents';
+export const CAMERA_ID = 'camera';
 const PAGE_SIZE = 80;
 const THUMB_WIDTH = 400;
 
@@ -153,6 +154,14 @@ export async function listMediaAlbums(kind: MediaKind): Promise<PhotoAlbumInfo[]
   ];
 }
 
+async function resolveAlbumId(albumId?: string): Promise<string | undefined | null> {
+  if (!albumId || albumId === RECENTS_ID) return undefined;
+  if (albumId !== CAMERA_ID) return albumId;
+  const albums = await MediaLibrary.getAlbumsAsync({ includeSmartAlbums: true });
+  const camera = albums.find((album) => isCameraTitle(album.title));
+  return camera?.id ?? null;
+}
+
 export async function listPhotoAlbums(): Promise<PhotoAlbumInfo[]> {
   return listMediaAlbums('photo');
 }
@@ -163,10 +172,14 @@ export async function listVideoAlbums(): Promise<PhotoAlbumInfo[]> {
 
 export async function listMedia(kind: MediaKind, albumId?: string, after?: string): Promise<PhotoPage> {
   await requirePermission();
+  const resolved = await resolveAlbumId(albumId);
+  if (resolved === null) {
+    return { assets: [], endCursor: null, hasNextPage: false, totalCount: 0 };
+  }
   const page = await MediaLibrary.getAssetsAsync({
     first: PAGE_SIZE,
     after: after || undefined,
-    album: albumId && albumId !== RECENTS_ID ? albumId : undefined,
+    album: resolved,
     mediaType: nativeType(kind),
     sortBy: [[MediaLibrary.SortBy.creationTime, false]],
   });

@@ -508,7 +508,10 @@ export function hostPageHtml(pin: string, access = ''): string {
       background: var(--bg);
       font-size: 16px;
     }
-    body[data-view="documents"] #view-documents { display: flex; }
+    .documents-bar { display: none !important; }
+    .documents-content { display: none; }
+    body[data-view="documents"] .documents-bar { display: flex !important; }
+    body[data-view="documents"] .documents-content { display: block; }
     .photos-bar { display: none !important; }
     .photos-content { display: none; flex: 1; min-height: 0; background: var(--bg-2); color: var(--text); }
     body[data-view="photos"] .photos-bar,
@@ -784,6 +787,18 @@ export function hostPageHtml(pin: string, access = ''): string {
         <button class="icon-btn" title="Files">${iconGrid()}</button>
         <button class="icon-btn power-btn" title="Quit">${iconPower()}</button>
         <input id="file" type="file" accept="audio/mpeg,.mp3" multiple />
+        <input id="home-file" type="file" multiple />
+      </header>
+      <header class="toolbar documents-bar">
+        <button class="upload" id="doc-upload">${iconUpload()} Upload files</button>
+        <button class="icon-btn" id="doc-download" title="Download selected" disabled>${iconDownload()}</button>
+        <button class="icon-btn" id="doc-refresh" title="Refresh">${iconRefresh()}</button>
+        <button class="icon-btn" id="doc-remove" title="Delete selected" disabled>${iconTrash()}</button>
+        <span class="spacer"></span>
+        <span class="pill">Documents</span>
+        <span class="spacer"></span>
+        <button class="icon-btn power-btn" title="Quit">${iconPower()}</button>
+        <input id="doc-file" type="file" multiple />
       </header>
       <header class="toolbar photos-bar">
         <button class="icon-btn" id="photo-download" title="Download selected" disabled>${iconDownload()}</button>
@@ -806,7 +821,7 @@ export function hostPageHtml(pin: string, access = ''): string {
           <div class="phone-screen" id="phone-screen">
             <div class="phone-file"></div>
             <div class="phone-cursor"></div>
-            <div class="phone-copy">Drag &amp; drop to transfer</div>
+            <div class="phone-copy">Drop MP3s or files to transfer</div>
           </div>
         </div>
         <div class="home-info">
@@ -830,7 +845,20 @@ export function hostPageHtml(pin: string, access = ''): string {
           <div class="photos-empty">Loading photos…</div>
         </div>
       </div>
-      <div class="placeholder" id="view-documents">No documents on this phone yet.</div>
+      <div class="content documents-content">
+        <table>
+          <thead>
+            <tr>
+              <th class="check"><input id="doc-select-all" type="checkbox" /></th>
+              <th>Name</th>
+              <th>Format</th>
+              <th>Size</th>
+            </tr>
+          </thead>
+          <tbody id="doc-rows"></tbody>
+        </table>
+        <div class="empty" id="doc-empty" hidden>No documents on this phone yet.</div>
+      </div>
       <div class="content music-content">
         <table>
           <thead>
@@ -908,6 +936,11 @@ export function hostPageHtml(pin: string, access = ''): string {
     }
     const uploadButton = document.getElementById('upload');
     const fileInput = document.getElementById('file');
+    const homeFileInput = document.getElementById('home-file');
+    const docUploadButton = document.getElementById('doc-upload');
+    const docFileInput = document.getElementById('doc-file');
+    const docDownloadBtn = document.getElementById('doc-download');
+    const docRemoveBtn = document.getElementById('doc-remove');
     const progressWrap = document.getElementById('progress-wrap');
     const progressLabel = document.getElementById('progress-label');
     const progressFill = document.getElementById('progress-fill');
@@ -918,6 +951,7 @@ export function hostPageHtml(pin: string, access = ''): string {
     const audio = new Audio();
     audio.preload = 'metadata';
     let tracks = [];
+    var documents = [];
     let currentIndex = -1;
     let looping = false;
     var galleryKind = 'photos';
@@ -1003,6 +1037,7 @@ export function hostPageHtml(pin: string, access = ''): string {
         return;
       }
       closeLightbox();
+      if (view === 'documents') loadDocuments();
     }
 
     function photoDateKey(ms) {
@@ -1060,7 +1095,7 @@ export function hostPageHtml(pin: string, access = ''): string {
       var state = gallery();
       if (state.mode === 'gallery') state.lastAlbumId = state.albumId;
       state.mode = mode;
-      state.albumId = mode === 'camera' ? 'recents' : state.lastAlbumId;
+      state.albumId = mode === 'camera' ? 'camera' : state.lastAlbumId;
       applyGalleryModeUi();
       renderAlbums();
       loadPhotoAssets();
@@ -1180,7 +1215,7 @@ export function hostPageHtml(pin: string, access = ''): string {
         state.albums = data.albums || [];
         state.loaded = true;
         if (state.mode === 'camera') {
-          state.albumId = 'recents';
+          state.albumId = 'camera';
         } else if (!state.albums.some(function (album) { return album.id === state.albumId; })) {
           state.albumId = state.albums[0] ? state.albums[0].id : 'recents';
         }
@@ -1219,10 +1254,8 @@ export function hostPageHtml(pin: string, access = ''): string {
         'Internal Storage: ' + formatGb(used) + ' / ' + formatGb(total);
     }
 
-    function mp3FilesFromList(list) {
-      return Array.from(list || []).filter(function (file) {
-        return /audio\\/(mpeg|mp3)/.test(file.type) || /\\.mp3$/i.test(file.name);
-      });
+    function isMp3File(file) {
+      return /audio\\/(mpeg|mp3)/.test(file.type) || /\\.mp3$/i.test(file.name);
     }
 
     function escapeHtml(value) {
@@ -1324,12 +1357,68 @@ export function hostPageHtml(pin: string, access = ''): string {
       await loadDevice();
     }
 
-    function uploadFile(file, onProgress) {
+    function docUrl(filename, download) {
+      return '/documents/file?' + authQ() + '&name=' + encodeURIComponent(filename) + (download ? '&download=1' : '');
+    }
+
+    function selectedDocNames() {
+      return Array.from(document.querySelectorAll('.doc-check:checked')).map(function (el) { return el.value; });
+    }
+
+    function updateDocSelection() {
+      var names = selectedDocNames();
+      docDownloadBtn.disabled = names.length === 0;
+      docRemoveBtn.disabled = names.length === 0;
+      var all = document.querySelectorAll('.doc-check');
+      document.getElementById('doc-select-all').checked = all.length > 0 && names.length === all.length;
+    }
+
+    function fileExt(name) {
+      var i = String(name).lastIndexOf('.');
+      return i > 0 ? String(name).slice(i + 1).toLowerCase() : '';
+    }
+
+    function renderDocuments() {
+      var body = document.getElementById('doc-rows');
+      var empty = document.getElementById('doc-empty');
+      if (!documents.length) {
+        body.innerHTML = '';
+        empty.hidden = false;
+        updateDocSelection();
+        return;
+      }
+      empty.hidden = true;
+      body.innerHTML = documents.map(function (file) {
+        return '<tr>' +
+          '<td class="check"><input class="doc-check" type="checkbox" value="' + escapeHtml(file.filename) + '" /></td>' +
+          '<td class="name">' + escapeHtml(file.filename) + '</td>' +
+          '<td>' + escapeHtml(fileExt(file.filename) || 'file') + '</td>' +
+          '<td>' + formatSize(file.size) + '</td>' +
+          '</tr>';
+      }).join('');
+      updateDocSelection();
+    }
+
+    async function loadDocuments() {
+      var res = await fetch('/api/documents?' + authQ(), { headers: headers });
+      if (res.status === 401) { kickOut(); return; }
+      if (!res.ok) {
+        documents = [];
+        renderDocuments();
+        return;
+      }
+      var data = await res.json();
+      documents = data.files || [];
+      renderDocuments();
+    }
+
+    function uploadFile(path, file, onProgress) {
       return new Promise(function (resolve, reject) {
         var xhr = new XMLHttpRequest();
-        var url = '/upload?' + authQ() + '&filename=' + encodeURIComponent(file.name);
+        var url = path + '?' + authQ() + '&filename=' + encodeURIComponent(file.name);
         xhr.open('POST', url);
         xhr.setRequestHeader('X-Pin', pin);
+        xhr.setRequestHeader('X-Access', access);
         xhr.setRequestHeader('Content-Type', 'application/octet-stream');
         xhr.upload.onprogress = function (event) {
           if (event.lengthComputable) onProgress(event.loaded / event.total);
@@ -1343,46 +1432,81 @@ export function hostPageHtml(pin: string, access = ''): string {
       });
     }
 
-    async function startUpload(files) {
-      if (!files.length) return;
+    function splitUploadFiles(files, kind) {
+      var musicFiles = [];
+      var docFiles = [];
+      Array.from(files || []).forEach(function (file) {
+        if (kind === 'documents') docFiles.push(file);
+        else if (kind === 'music') {
+          if (isMp3File(file)) musicFiles.push(file);
+        } else if (isMp3File(file)) musicFiles.push(file);
+        else docFiles.push(file);
+      });
+      return { musicFiles: musicFiles, docFiles: docFiles };
+    }
+
+    async function startUpload(files, kind) {
+      var split = splitUploadFiles(files, kind || 'auto');
+      var queue = split.musicFiles.map(function (file) {
+        return { file: file, path: '/upload' };
+      }).concat(split.docFiles.map(function (file) {
+        return { file: file, path: '/documents/upload' };
+      }));
+      if (!queue.length) {
+        alert(kind === 'music' ? 'Choose MP3 files.' : 'Drop MP3s or other files to transfer.');
+        return;
+      }
       uploadButton.disabled = true;
+      docUploadButton.disabled = true;
       setProgress(true, 'Starting upload…', 0);
       var uploaded = 0;
       try {
-        for (var i = 0; i < files.length; i++) {
-          await uploadFile(files[i], function (fileRatio) {
-            setProgress(true, 'Uploading ' + (i + 1) + ' of ' + files.length + ': ' + files[i].name, (i + fileRatio) / files.length);
+        for (var i = 0; i < queue.length; i++) {
+          await uploadFile(queue[i].path, queue[i].file, function (fileRatio) {
+            setProgress(true, 'Uploading ' + (i + 1) + ' of ' + queue.length + ': ' + queue[i].file.name, (i + fileRatio) / queue.length);
           });
           uploaded += 1;
-          setProgress(true, 'Uploaded ' + (i + 1) + ' of ' + files.length, (i + 1) / files.length);
+          setProgress(true, 'Uploaded ' + (i + 1) + ' of ' + queue.length, (i + 1) / queue.length);
         }
         setProgress(true, 'Upload complete', 1);
-        var doneMessage = files.length === 1
-          ? files[0].name + ' was uploaded to the phone.'
-          : files.length + ' MP3s were uploaded to the phone.';
-        alert('Upload complete. ' + doneMessage);
+        var parts = [];
+        if (split.musicFiles.length) parts.push(split.musicFiles.length === 1 ? '1 MP3' : split.musicFiles.length + ' MP3s');
+        if (split.docFiles.length) parts.push(split.docFiles.length === 1 ? '1 file' : split.docFiles.length + ' files');
+        alert('Upload complete. ' + parts.join(' and ') + ' saved on the phone.');
         fileInput.value = '';
+        homeFileInput.value = '';
+        docFileInput.value = '';
         await loadTracks();
+        await loadDocuments();
         await loadDevice();
       } catch (error) {
         alert(error.message || 'Upload failed');
       } finally {
         try {
-          await fetch('/api/upload-batch-complete?' + authQ() + '&fail=' + (files.length - uploaded), {
+          await fetch('/api/upload-batch-complete?' + authQ() + '&fail=' + (queue.length - uploaded), {
             method: 'POST',
             headers: headers
           });
         } catch (e) {}
         uploadButton.disabled = false;
+        docUploadButton.disabled = false;
         setTimeout(function () { setProgress(false, '', 0); }, 1200);
       }
     }
 
     uploadButton.addEventListener('click', function () { fileInput.click(); });
     fileInput.addEventListener('change', function () {
-      startUpload(Array.from(fileInput.files || []));
+      startUpload(Array.from(fileInput.files || []), 'music');
+    });
+    docUploadButton.addEventListener('click', function () { docFileInput.click(); });
+    docFileInput.addEventListener('change', function () {
+      startUpload(Array.from(docFileInput.files || []), 'documents');
     });
     document.getElementById('refresh').addEventListener('click', function () { loadTracks(); });
+    document.getElementById('doc-refresh').addEventListener('click', function () { loadDocuments(); });
+    homeFileInput.addEventListener('change', function () {
+      startUpload(Array.from(homeFileInput.files || []), 'auto');
+    });
     document.getElementById('photo-refresh').addEventListener('click', function () { loadGallery(true); });
     document.getElementById('photos-tab-camera').addEventListener('click', function () { setPhotosMode('camera'); });
     document.getElementById('photos-tab-gallery').addEventListener('click', function () { setPhotosMode('gallery'); });
@@ -1507,7 +1631,7 @@ export function hostPageHtml(pin: string, access = ''): string {
       }
     });
     var phoneScreen = document.getElementById('phone-screen');
-    phoneScreen.addEventListener('click', function () { fileInput.click(); });
+    phoneScreen.addEventListener('click', function () { homeFileInput.click(); });
     ['dragenter', 'dragover'].forEach(function (name) {
       phoneScreen.addEventListener(name, function (event) {
         event.preventDefault();
@@ -1521,12 +1645,8 @@ export function hostPageHtml(pin: string, access = ''): string {
       });
     });
     phoneScreen.addEventListener('drop', function (event) {
-      var files = mp3FilesFromList(event.dataTransfer && event.dataTransfer.files);
-      if (!files.length) {
-        alert('Drop MP3 files to upload them to the phone.');
-        return;
-      }
-      startUpload(files);
+      var files = Array.from((event.dataTransfer && event.dataTransfer.files) || []);
+      startUpload(files, 'auto');
     });
     document.getElementById('select-all').addEventListener('change', function (event) {
       var checked = event.target.checked;
@@ -1542,6 +1662,42 @@ export function hostPageHtml(pin: string, access = ''): string {
       if (!row) return;
       playIndex(Number(row.getAttribute('data-index')));
     });
+    document.getElementById('doc-select-all').addEventListener('change', function (event) {
+      var checked = event.target.checked;
+      document.querySelectorAll('.doc-check').forEach(function (el) { el.checked = checked; });
+      updateDocSelection();
+    });
+    document.getElementById('doc-rows').addEventListener('change', function (event) {
+      if (event.target.classList.contains('doc-check')) updateDocSelection();
+    });
+    docDownloadBtn.addEventListener('click', function () {
+      selectedDocNames().forEach(function (name) {
+        var link = document.createElement('a');
+        link.href = docUrl(name, true);
+        link.download = name;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+      });
+    });
+    docRemoveBtn.addEventListener('click', async function () {
+      var names = selectedDocNames();
+      if (!names.length) return;
+      if (!confirm('Delete ' + names.length + ' selected ' + (names.length === 1 ? 'file' : 'files') + ' from the phone?')) return;
+      var res = await fetch('/api/documents/delete?' + authQ(), {
+        method: 'POST',
+        headers: Object.assign({ 'Content-Type': 'application/json' }, headers),
+        body: JSON.stringify({ filenames: names })
+      });
+      var data = {};
+      try { data = await res.json(); } catch (e) {}
+      if (!res.ok || !data.ok) {
+        alert('Could not delete files.');
+        return;
+      }
+      await loadDocuments();
+      await loadDevice();
+    });
     downloadBtn.addEventListener('click', function () {
       selectedNames().forEach(function (name) {
         var link = document.createElement('a');
@@ -1556,11 +1712,17 @@ export function hostPageHtml(pin: string, access = ''): string {
       var names = selectedNames();
       if (!names.length) return;
       if (!confirm('Delete ' + names.length + ' selected ' + (names.length === 1 ? 'track' : 'tracks') + ' from the phone?')) return;
-      await fetch('/api/delete?' + authQ(), {
+      var res = await fetch('/api/delete?' + authQ(), {
         method: 'POST',
         headers: Object.assign({ 'Content-Type': 'application/json' }, headers),
         body: JSON.stringify({ filenames: names })
       });
+      var data = {};
+      try { data = await res.json(); } catch (e) {}
+      if (!res.ok || !data.ok) {
+        alert('Could not delete tracks.');
+        return;
+      }
       if (currentIndex >= 0 && names.indexOf(tracks[currentIndex].filename) !== -1) {
         audio.pause();
         audio.removeAttribute('src');
