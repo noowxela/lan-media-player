@@ -8,6 +8,7 @@ Expo Go is not enough. Native modules (`react-native-tcp-socket`, `expo-media-li
 
 - **Library** — import MP3s, play, multi-select, delete
 - **Now Playing** — seek, prev / pause / next, loop, lock-screen audio
+- **Home Screen widget** — iOS **Now Playing** (see [docs/ios-builds.md](docs/ios-builds.md))
 - **Transfer (host)** — QR + PIN, connected devices, Accept / Decline / Disconnect
 - **Transfer (join)** — type IP + PIN or scan the host QR, then download tracks
 - **LAN browser page** — Home, Photos, Videos, Music, and Documents (files dropped onto the phone)
@@ -22,10 +23,11 @@ npm install
 npx expo run:ios
 ```
 
-Device:
+Device (dev vs local Release): see [docs/ios-builds.md](docs/ios-builds.md).
 
 ```bash
 npx expo run:ios --device
+npx expo run:ios --device --configuration Release
 ```
 
 Keep the Metro bundler running. After JS-only LAN HTML changes, reload the app, then **Stop sharing → Start sharing**, and refresh the browser.
@@ -44,4 +46,4 @@ PIN changes each time you start sharing. Home drag-and-drop sends MP3s to Music 
 
 ## Stack
 
-Expo SDK 57, Expo Router, `expo-audio`, `react-native-tcp-socket` (LAN HTTP), `expo-media-library` (photos and videos).
+Expo SDK 57, Expo Router, `expo-audio`, `react-native-tcp-socket` (LAN HTTP), `expo-media-library` (photos and videos), `expo-widgets` (iOS Home Screen).

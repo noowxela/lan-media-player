@@ -15,7 +15,9 @@
         "NSAppTransportSecurity": {
           "NSAllowsLocalNetworking": true
         },
-        "UIBackgroundModes": ["audio"],
+        "UIBackgroundModes": [
+          "audio"
+        ],
         "UIFileSharingEnabled": true,
         "LSSupportsOpeningDocumentsInPlace": true,
         "NSPhotoLibraryUsageDescription": "This app reads and deletes photos and videos in your library when you share them over Wi-Fi."
@@ -73,9 +75,29 @@
         {
           "photosPermission": "This app reads and deletes photos and videos in your library when you share them over Wi-Fi.",
           "savePhotosPermission": false,
-          "granularPermissions": ["photo", "video"]
+          "granularPermissions": [
+            "photo",
+            "video"
+          ]
         }
-      ]
+      ],
+      [
+        "expo-widgets",
+        {
+          "bundleIdentifier": "com.alexwoon.musicplayer.widgets",
+          "groupIdentifier": "group.com.alexwoon.musicplayer",
+          "widgets": [
+            {
+              "name": "NowPlayingWidget",
+              "displayName": "Now Playing",
+              "description": "See the current track from Music Player on your Home Screen.",
+              "contentMarginsDisabled": true,
+              "supportedFamilies": ["systemSmall", "systemMedium"]
+            }
+          ]
+        }
+      ],
+      "./plugins/with-personal-team-signing"
     ],
     "experiments": {
       "typedRoutes": true,

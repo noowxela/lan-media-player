@@ -15,6 +15,7 @@ import * as DocumentPicker from 'expo-document-picker';
 const uploadDoneSound = require('../../assets/sounds/upload-done.wav');
 
 import { subscribeIncomingUploads } from '@/lib/lan-server';
+import { pushNowPlayingWidget } from '@/lib/now-playing-widget';
 
 import {
   deleteTracks as removeTracks,
@@ -161,6 +162,14 @@ export function MusicProvider({ children }: { children: ReactNode }) {
     if (current.duration && Math.abs(current.duration - status.duration) < 0.5) return;
     void updateTrackDuration(current.id, status.duration);
   }, [status.duration, status.isLoaded, currentTrack?.id]);
+
+  useEffect(() => {
+    pushNowPlayingWidget({
+      title: currentTrack?.title ?? 'Nothing playing',
+      artist: currentTrack?.artist ?? (currentTrack ? 'Local MP3' : 'Open the app to play'),
+      status: currentTrack ? (status.playing ? 'Playing' : 'Paused') : 'Idle',
+    });
+  }, [currentTrack, status.playing]);
 
   const togglePlay = useCallback(() => {
     if (!currentRef.current) {
