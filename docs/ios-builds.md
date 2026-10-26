@@ -16,6 +16,44 @@ npx expo run:ios --device --configuration Release
 
 Keep Metro running only for the development command. After JS-only LAN HTML changes on a dev build: reload the app, Stop sharing → Start sharing, then refresh the browser.
 
+## Certificate expired (reinstall on iPhone)
+
+A free Apple ID signing certificate lasts about **7 days**. After that, iOS will not open the app. Rebuild and install over USB. This is not an App Store update.
+
+Deleting the app also deletes the music stored inside it.
+
+### On the iPhone
+
+1. Delete **Music Player** if it is still on the Home Screen (long-press → Remove App).
+2. Unlock the phone and leave it unlocked.
+3. Plug it into the Mac with a cable. Tap **Trust** if the phone asks.
+4. If iOS asks for Developer Mode: **Settings → Privacy & Security → Developer Mode → On**, then restart the phone.
+
+### On the Mac
+
+1. Open Xcode → **Settings → Accounts**. The same Apple ID used last time must be signed in. If it is missing, click **+** and sign in.
+2. From the project folder:
+
+```bash
+npx expo run:ios --device --configuration Release
+```
+
+3. When asked which device, pick the iPhone. Xcode creates a new certificate and installs the app. The first build can take several minutes.
+
+`--configuration Release` bundles the JavaScript in the app, so the phone works after you unplug it. For live reload while coding, use `npx expo run:ios --device` and leave the terminal open.
+
+### Trust the new certificate
+
+The first launch after a new certificate often fails until you trust it:
+
+1. On the iPhone: **Settings → General → VPN & Device Management**
+2. Under **Developer App**, tap your Apple ID
+3. Tap **Trust**
+
+Open **Music Player** again.
+
+A free Apple ID expires again in about 7 days. Repeat the Release command above. A paid Apple Developer account ($99/year) keeps the install valid for a year.
+
 ## Home Screen widget
 
 After a **native** rebuild (`npx expo run:ios --device`), add **Now Playing**:
