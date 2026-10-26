@@ -4,6 +4,7 @@ import { Alert, Platform, Pressable, ScrollView, StyleSheet, Switch, View } from
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AppButton } from '@/components/app-button';
+import { CalendarAccessCard } from '@/components/calendar-access-card';
 import { ChangelogEntryView } from '@/components/changelog-view';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
@@ -204,6 +205,8 @@ export default function SettingsScreen() {
             ))
           )}
         </ThemedView>
+
+        <CalendarAccessCard />
 
         <ThemedView type="backgroundElement" style={styles.card}>
           <ThemedText type="smallBold">关于 · 版本 About</ThemedText>

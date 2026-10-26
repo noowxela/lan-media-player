@@ -1,7 +1,7 @@
 import Constants from 'expo-constants';
 
 // What this build can do over LAN (reported to the dashboard so it can tell old builds apart).
-export const LAN_FEATURES = ['pairing', 'background', 'resume', 'token-only', 'delete-grant', 'app-trash', 'upload', 'app-info', 'changelog'];
+export const LAN_FEATURES = ['pairing', 'background', 'resume', 'token-only', 'delete-grant', 'app-trash', 'upload', 'app-info', 'changelog', 'calendar', 'reminders'];
 
 export type AppInfo = {
   version: string;

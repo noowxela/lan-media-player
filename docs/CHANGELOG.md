@@ -2,6 +2,18 @@
 
 <!-- Generated from src/lib/changelog.json by `node scripts/changelog-md.js`. Edit the JSON, not this file. -->
 
+## v1.0.2 (build 3) · 2026-10-26
+
+### 新功能 · New
+
+- 日历与提醒事项: 已连接的电脑 (知识中心 📅 日历) 可以查看、新建、修改 iPhone 日历活动和提醒事项 · Calendar & Reminders: the paired computer can view, create and edit your iPhone events and reminders
+- 重复活动可以只改 "这一次" 或 "这次及以后" · Recurring events: edit this event only, or this and all future events
+- 设置里新增 "日历与提醒事项" 卡片: 查看授权状态、请求授权、跳到 iPhone 设置 · New Calendar & Reminders card in Settings (status, allow, open iOS Settings)
+
+### 改进 · Improvements
+
+- 删除日历活动 / 提醒事项同样需要 "允许删除" 授权; 只读日历 (节假日、订阅) 不能修改 · Deleting events / reminders uses the same delete permission; read-only calendars (holidays, subscriptions) are protected
+
 ## v1.0.1 (build 2) · 2026-10-26
 
 ### 新功能 · New

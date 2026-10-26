@@ -26,6 +26,7 @@ import { Directory, File, Paths } from 'expo-file-system';
 import { publishBonjour, unpublishBonjour } from '../../modules/kc-background';
 import { getAppInfo } from '@/lib/app-info';
 import { changelogFor } from '@/lib/changelog';
+import * as PhoneCal from '@/lib/phone-calendar';
 import { getShareDeviceInfo } from '@/lib/device-info';
 import {
   addDocumentFromBytes,
@@ -206,6 +207,65 @@ function pinMatches(request: ParsedRequest, pin: string): boolean {
 }
 
 /** 403 for music / Documents deletes until the phone owner allowed deletes for this connection. */
+function calJson(status: number, body: unknown): Buffer {
+  const text = status === 200 ? 'OK' : status === 403 ? 'Forbidden' : status === 404 ? 'Not Found' : status === 400 ? 'Bad Request' : 'Error';
+  return httpResponse(status, text, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }, JSON.stringify(body));
+}
+
+/** iPhone Calendar + Reminders (phone-calendar.ts). Token-only like every /api route; deletes need the delete grant. */
+async function handleCalendarRequest(pathname: string, request: ParsedRequest, accessToken: string): Promise<Buffer> {
+  const m = request.method;
+  let body: Record<string, unknown> = {};
+  if (m === 'POST') {
+    try {
+      const parsed = JSON.parse(request.body.toString('utf8') || '{}');
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) body = parsed as Record<string, unknown>;
+    } catch {
+      return calJson(400, { ok: false, error: 'Bad JSON' });
+    }
+  }
+  const ids = (request.query.get('calendars') || request.query.get('lists') || '').split(',').filter(Boolean);
+  try {
+    if (pathname === '/api/calendar/permission' && m === 'GET') return calJson(200, await PhoneCal.calendarPermissions());
+    if (pathname === '/api/calendar/permission' && m === 'POST') return calJson(200, await PhoneCal.requestCalendarAccess());
+    if (pathname === '/api/calendar/calendars' && m === 'GET') return calJson(200, await PhoneCal.listCalendars());
+    if (pathname === '/api/calendar/events' && m === 'GET') {
+      const events = await PhoneCal.listEvents(request.query.get('start') || '', request.query.get('end') || '', ids);
+      return calJson(200, { events });
+    }
+    if (pathname === '/api/calendar/event' && m === 'GET') {
+      return calJson(200, { event: await PhoneCal.eventDetail(request.query.get('id') || '', request.query.get('instanceStart') || undefined) });
+    }
+    if (pathname === '/api/calendar/event' && m === 'POST') return calJson(200, { ok: true, id: await PhoneCal.createEvent(body) });
+    if (pathname === '/api/calendar/event/update' && m === 'POST') return calJson(200, { ok: true, id: await PhoneCal.updateEvent(body) });
+    if (pathname === '/api/calendar/event/delete' && m === 'POST') {
+      if (!deleteGrantFor(accessToken).granted) return needDeleteGrant();
+      await PhoneCal.deleteEvent(body);
+      return calJson(200, { ok: true });
+    }
+    if (pathname === '/api/reminders' && m === 'GET') {
+      const st = request.query.get('status');
+      const status = st === 'completed' || st === 'incomplete' ? st : 'all';
+      return calJson(200, { reminders: await PhoneCal.listReminders(status, ids) });
+    }
+    if (pathname === '/api/reminders' && m === 'POST') return calJson(200, { ok: true, id: await PhoneCal.createReminder(body) });
+    if (pathname === '/api/reminders/update' && m === 'POST') return calJson(200, { ok: true, id: await PhoneCal.updateReminder(body) });
+    if (pathname === '/api/reminders/delete' && m === 'POST') {
+      if (!deleteGrantFor(accessToken).granted) return needDeleteGrant();
+      await PhoneCal.deleteReminder(body);
+      return calJson(200, { ok: true });
+    }
+    return calJson(404, { ok: false, error: 'Not found' });
+  } catch (e) {
+    if (e instanceof PhoneCal.CalendarPermissionError) {
+      return calJson(403, { ok: false, error: e.message, needPermission: e.kind, permission: e.status });
+    }
+    if (e instanceof PhoneCal.ReadOnlyCalendarError) return calJson(403, { ok: false, error: e.message, readOnly: true });
+    if (e instanceof PhoneCal.CalendarInputError) return calJson(400, { ok: false, error: e.message });
+    return calJson(500, { ok: false, error: e instanceof Error ? e.message : String(e) });
+  }
+}
+
 function needDeleteGrant(): Buffer {
   return httpResponse(
     403,
@@ -473,6 +533,10 @@ async function handleRequest(request: ParsedRequest, pin: string, clientIp: stri
   if (pathname === '/api/device' && request.method === 'GET') {
     const info = await getShareDeviceInfo();
     return httpResponse(200, 'OK', { 'Content-Type': 'application/json' }, JSON.stringify({ ...info, app: appInfoJson() }));
+  }
+
+  if (pathname.startsWith('/api/calendar/') || pathname.startsWith('/api/reminders')) {
+    return handleCalendarRequest(pathname, request, accessToken);
   }
 
   try {
