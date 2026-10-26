@@ -38,9 +38,25 @@ Deleting the app also deletes the music stored inside it.
 npx expo run:ios --device --configuration Release
 ```
 
-3. When asked which device, pick the iPhone. Xcode creates a new certificate and installs the app. The first build can take several minutes.
+3. When asked which device, pick the iPhone. The first build can take several minutes.
 
 `--configuration Release` bundles the JavaScript in the app, so the phone works after you unplug it. For live reload while coding, use `npx expo run:ios --device` and leave the terminal open.
+
+### If the build says "No profiles" / `allowProvisioningUpdates`
+
+The project already has a development team, so Expo does not pass `-allowProvisioningUpdates`. After the old profile expires, Xcode will not create a new one and the build stops with:
+
+`No profiles for 'com.alexwoon.musicplayer' were found`
+
+Build once from the project folder with the flag (use the device id printed as `Using --device …`):
+
+```bash
+xcodebuild -workspace ios/MusicPlayer.xcworkspace -scheme MusicPlayer -configuration Release -destination 'id=DEVICE_ID' -allowProvisioningUpdates -allowProvisioningDeviceRegistration DEVELOPMENT_TEAM=GQCDC5S6CY
+```
+
+A Mac dialog may ask you to sign in to your Apple ID. After that command succeeds, run `npx expo run:ios --device --configuration Release` again. The new profiles are on disk, so the second install can finish.
+
+Signing in Xcode also refreshes the profiles: open `ios/MusicPlayer.xcworkspace`, choose the iPhone as the run destination, and press Run.
 
 ### Trust the new certificate
 

@@ -11,13 +11,27 @@ import {
   getAccessClient,
   isAccessTokenValid,
   normalizeClientIp,
+  noteTokenUse,
   resetLanAccess,
 } from '@/lib/lan-access';
+import { getDeviceId, pinForStart } from '@/lib/lan-pairing';
+import {
+  deleteGrantFor,
+  getDeleteGrantRequest,
+  noteDeleteGrantContact,
+  requestDeleteGrant,
+  revokeDeleteGrant,
+} from '@/lib/lan-delete-grant';
+import { Directory, File, Paths } from 'expo-file-system';
+import { publishBonjour, unpublishBonjour } from '../../modules/kc-background';
+import { getAppInfo } from '@/lib/app-info';
+import { changelogFor } from '@/lib/changelog';
 import { getShareDeviceInfo } from '@/lib/device-info';
 import {
   addDocumentFromBytes,
   contentTypeForFilename,
   deleteDocuments,
+  documentsDir,
   getDocumentFile,
   listDocuments,
 } from '@/lib/documents';
@@ -25,6 +39,7 @@ import { FAVICON_SVG, getFaviconPng } from '@/lib/favicon';
 import {
   addTrackFromBytes,
   deleteTracksByFilenames,
+  musicDir,
   getTrackFile,
   loadTracks,
 } from '@/lib/library';
@@ -46,6 +61,14 @@ import {
 import type { Track } from '@/lib/types';
 
 export const LAN_PORT = 8765;
+/** Protocol version reported by /api/ping. 2 = token auth on every endpoint, paired tokens, sleeping state, Range downloads. */
+export const LAN_API_VERSION = 2;
+
+function appInfoJson() {
+  const info = getAppInfo();
+  const notes = changelogFor(info.version);
+  return { ...info, api: LAN_API_VERSION, notes: notes ?? null };
+}
 const MAX_UPLOAD_BYTES = 200 * 1024 * 1024;
 const VIDEO_RANGE_MAX = 2 * 1024 * 1024;
 const HEADER_BREAK = Buffer.from('\r\n\r\n');
@@ -116,6 +139,47 @@ let server: ReturnType<typeof TcpSocket.createServer> | null = null;
 let currentPin = '';
 const activeSockets = new Set<Socket>();
 
+/** 'sleeping' = the app is about to be suspended: in-flight transfers finish, new requests get 503 Sleeping. */
+export type ShareState = 'awake' | 'sleeping';
+let shareState: ShareState = 'awake';
+let inflight = 0;
+let serverBroken = false;
+type ServerListener = () => void;
+const serverListeners = new Set<ServerListener>();
+function notifyServer(): void {
+  for (const listener of serverListeners) listener();
+}
+export function subscribeLanServer(listener: ServerListener): () => void {
+  serverListeners.add(listener);
+  return () => {
+    serverListeners.delete(listener);
+  };
+}
+export function setShareState(next: ShareState): void {
+  if (shareState === next) return;
+  shareState = next;
+  notifyServer();
+}
+export function getShareState(): ShareState {
+  return shareState;
+}
+export function inflightRequests(): number {
+  return inflight;
+}
+/** True when the listening socket reported an error/close (e.g. iOS reclaimed it while suspended). */
+export function isServerBroken(): boolean {
+  return serverBroken;
+}
+/** Resolves when no request is being served (or after timeoutMs). Returns true when idle. */
+export async function waitForIdle(timeoutMs: number, shouldStop?: () => boolean): Promise<boolean> {
+  const until = Date.now() + timeoutMs;
+  while (inflight > 0 && Date.now() < until) {
+    if (shouldStop?.()) return false;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  return inflight === 0;
+}
+
 function concat(a: Buffer, b: Buffer): Buffer {
   return Buffer.concat([a, b]);
 }
@@ -136,9 +200,55 @@ function parseHeaders(raw: string): { method: string; path: string; headers: Hea
   return { method: method.toUpperCase(), path: target, headers };
 }
 
-function authorized(request: ParsedRequest, pin: string): boolean {
+function pinMatches(request: ParsedRequest, pin: string): boolean {
   const provided = request.query.get('pin') || headerValue(request.headers, 'x-pin');
-  return provided === pin;
+  return !!pin && provided === pin;
+}
+
+/** 403 for music / Documents deletes until the phone owner allowed deletes for this connection. */
+function needDeleteGrant(): Buffer {
+  return httpResponse(
+    403,
+    'Forbidden',
+    { 'Content-Type': 'application/json', 'X-Delete-Grant': 'required' },
+    JSON.stringify({ ok: false, error: 'Delete not allowed', needGrant: true }),
+  );
+}
+
+const TRASH_KEEP_MS = 30 * 24 * 60 * 60_000;
+/** Deleted music / Documents are copied to Documents/.Trash/<kind>/<time>-<name> first and kept 30 days (no iOS trash for app files). */
+function keepInTrash(dir: Directory, kind: string, filenames: string[]): void {
+  try {
+    const trash = new Directory(Paths.document, '.Trash', kind);
+    if (!trash.exists) trash.create({ intermediates: true });
+    const stamp = Date.now();
+    for (const raw of filenames) {
+      const name = raw.replace(/\\/g, '/').split('/').pop() ?? '';
+      if (!name || name.startsWith('.')) continue;
+      const src = new File(dir, name);
+      if (src.exists) src.copy(new File(trash, `${stamp}-${name}`));
+    }
+  } catch {
+    // best effort: a failed trash copy must not block the delete the owner asked for
+  }
+}
+function purgeTrash(): void {
+  try {
+    for (const kind of ['music', 'files']) {
+      const trash = new Directory(Paths.document, '.Trash', kind);
+      if (!trash.exists) continue;
+      for (const item of trash.list()) {
+        const stamp = Number(String(item.name ?? '').split('-')[0]);
+        if (item instanceof File && stamp && Date.now() - stamp > TRASH_KEEP_MS) item.delete();
+      }
+    }
+  } catch {
+    // ignore
+  }
+}
+
+function unauthorized(text: string): Buffer {
+  return httpResponse(401, 'Unauthorized', { 'Content-Type': 'text/plain' }, text);
 }
 
 function httpHead(status: number, reason: string, headers: HeaderMap, contentLength: number): Buffer {
@@ -237,23 +347,26 @@ async function handleRequest(request: ParsedRequest, pin: string, clientIp: stri
     );
   }
 
-  if (!authorized(request, pin)) {
-    if (pathname === '/' && request.method === 'GET') {
-      return httpResponse(
-        401,
-        'Unauthorized',
-        {
-          'Content-Type': 'text/html; charset=utf-8',
-          'Cache-Control': 'no-store, no-cache, must-revalidate',
-          Pragma: 'no-cache',
-        },
-        pinErrorPageHtml(request.query.get('pin') || ''),
-      );
-    }
-    return httpResponse(401, 'Unauthorized', { 'Content-Type': 'text/plain' }, 'Invalid PIN');
-  }
-
+  // Auth (API v2): a valid access token (accepted session or remembered pairing) is required for every data
+  // endpoint. The PIN alone only opens the pairing flow (/, /api/access) and /api/ping; it no longer grants data.
   const accessToken = accessTokenFromRequest(request.query, request.headers);
+  const tokenOk = isAccessTokenValid(accessToken);
+  if (tokenOk) {
+    noteTokenUse(accessToken, clientIp);
+    noteDeleteGrantContact(accessToken);
+  }
+  const pinOk = pinMatches(request, pin);
+
+  if (pathname === '/api/ping' && request.method === 'GET') {
+    if (accessToken && !tokenOk) return unauthorized(pinOk ? 'Disconnected' : 'Not paired');
+    if (!tokenOk && !pinOk) return unauthorized('Invalid PIN');
+    return httpResponse(
+      200,
+      'OK',
+      { 'Content-Type': 'application/json', 'X-Phone-State': shareState },
+      JSON.stringify({ ok: true, api: LAN_API_VERSION, state: shareState, id: getDeviceId(), paired: tokenOk, deleteGrant: tokenOk ? deleteGrantFor(accessToken) : undefined, app: tokenOk ? appInfoJson() : undefined }),
+    );
+  }
 
   if (pathname === '/' && request.method === 'GET') {
     const htmlHeaders = {
@@ -261,10 +374,23 @@ async function handleRequest(request: ParsedRequest, pin: string, clientIp: stri
       'Cache-Control': 'no-store, no-cache, must-revalidate',
       Pragma: 'no-cache',
     };
-    if (isAccessTokenValid(accessToken)) {
-      return httpResponse(200, 'OK', htmlHeaders, hostPageHtml(pin, accessToken));
+    if (tokenOk) {
+      return httpResponse(200, 'OK', htmlHeaders, hostPageHtml(pinOk ? pin : '', accessToken));
     }
-    const session = acceptedClientForIp(clientIp) ?? createPendingAccess(clientIp);
+    if (!pinOk) {
+      return httpResponse(
+        401,
+        'Unauthorized',
+        { ...htmlHeaders },
+        pinErrorPageHtml(request.query.get('pin') || ''),
+      );
+    }
+    if (shareState === 'sleeping') {
+      return httpResponse(503, 'Service Unavailable', { 'Content-Type': 'text/plain', 'X-Phone-State': 'sleeping', 'Retry-After': '30' }, 'Sleeping');
+    }
+    const wantsPair = headerValue(request.headers, 'x-pair') === '1';
+    const clientName = headerValue(request.headers, 'x-client-name').replace(/[^\p{L}\p{N} ._()@'-]/gu, '').slice(0, 80);
+    const session = (!wantsPair && acceptedClientForIp(clientIp)) || createPendingAccess(clientIp, clientName, wantsPair);
     if (session.status === 'accepted') {
       if (accessToken !== session.token) {
         return httpResponse(
@@ -294,6 +420,7 @@ async function handleRequest(request: ParsedRequest, pin: string, clientIp: stri
   }
 
   if (pathname === '/api/access' && request.method === 'GET') {
+    if (!pinOk) return unauthorized('Invalid PIN');
     const client = getAccessClient(request.query.get('id') || '');
     if (!client) {
       return httpResponse(404, 'Not Found', { 'Content-Type': 'application/json' }, JSON.stringify({ error: 'Unknown request' }));
@@ -306,32 +433,46 @@ async function handleRequest(request: ParsedRequest, pin: string, clientIp: stri
         status: client.status,
         token: client.status === 'accepted' ? client.token : undefined,
         ip: client.ip,
+        paired: client.paired,
       }),
     );
   }
 
+  if (!tokenOk) {
+    if (accessToken) return unauthorized('Disconnected');
+    return unauthorized(pinOk ? 'Not paired' : 'Invalid PIN');
+  }
+
   if (pathname === '/api/disconnect' && request.method === 'POST') {
-    if (!isAccessTokenValid(accessToken)) {
-      return httpResponse(401, 'Unauthorized', { 'Content-Type': 'text/plain' }, 'Disconnected');
-    }
-    disconnectByToken(accessToken);
+    disconnectByToken(accessToken, request.query.get('forget') === '1');
     return httpResponse(200, 'OK', { 'Content-Type': 'application/json' }, JSON.stringify({ ok: true }));
   }
 
-  if (pathname === '/api/ping' && request.method === 'GET') {
-    if (accessToken && !isAccessTokenValid(accessToken)) {
-      return httpResponse(401, 'Unauthorized', { 'Content-Type': 'text/plain' }, 'Disconnected');
-    }
-    return httpResponse(200, 'OK', { 'Content-Type': 'application/json' }, '{"ok":true}');
+  if (shareState === 'sleeping') {
+    return httpResponse(503, 'Service Unavailable', { 'Content-Type': 'text/plain', 'X-Phone-State': 'sleeping', 'Retry-After': '30' }, 'Sleeping');
   }
 
-  if (accessToken && !isAccessTokenValid(accessToken)) {
-    return httpResponse(401, 'Unauthorized', { 'Content-Type': 'text/plain' }, 'Disconnected');
+  // ---- delete grant: one phone-side "Allow deletes during this connection" per client token (lan-delete-grant.ts)
+  if (pathname === '/api/delete-grant' && request.method === 'GET') {
+    const req = getDeleteGrantRequest(request.query.get('id') || '');
+    const g = deleteGrantFor(accessToken);
+    return httpResponse(200, 'OK', { 'Content-Type': 'application/json' }, JSON.stringify({ ...g, request: req && req.token === accessToken ? req.status : undefined }));
+  }
+  if (pathname === '/api/delete-grant' && request.method === 'POST') {
+    const g = deleteGrantFor(accessToken);
+    if (g.granted) return httpResponse(200, 'OK', { 'Content-Type': 'application/json' }, JSON.stringify(g));
+    const name = headerValue(request.headers, 'x-client-name').replace(/[^\p{L}\p{N} ._()@'-]/gu, '').slice(0, 80);
+    const req = requestDeleteGrant(accessToken, name, clientIp);
+    return httpResponse(200, 'OK', { 'Content-Type': 'application/json' }, JSON.stringify({ ...g, pending: true, id: req.id }));
+  }
+  if (pathname === '/api/delete-grant/revoke' && request.method === 'POST') {
+    revokeDeleteGrant(accessToken);
+    return httpResponse(200, 'OK', { 'Content-Type': 'application/json' }, JSON.stringify({ ok: true, granted: false }));
   }
 
   if (pathname === '/api/device' && request.method === 'GET') {
     const info = await getShareDeviceInfo();
-    return httpResponse(200, 'OK', { 'Content-Type': 'application/json' }, JSON.stringify(info));
+    return httpResponse(200, 'OK', { 'Content-Type': 'application/json' }, JSON.stringify({ ...info, app: appInfoJson() }));
   }
 
   try {
@@ -525,7 +666,7 @@ async function handleRequest(request: ParsedRequest, pin: string, clientIp: stri
     const bytes = Buffer.from(await file.bytes());
     const asDownload = request.query.get('download') === '1';
     const rangeHeader = headerValue(request.headers, 'range');
-    if (rangeHeader && !asDownload) {
+    if (rangeHeader) {
       const range = parseByteRange(rangeHeader, bytes.length);
       if (!range) {
         return httpResponse(
@@ -542,7 +683,9 @@ async function handleRequest(request: ParsedRequest, pin: string, clientIp: stri
           'Content-Type': 'audio/mpeg',
           'Accept-Ranges': 'bytes',
           'Content-Range': `bytes ${range.start}-${range.end}/${bytes.length}`,
-          'Content-Disposition': 'inline',
+          'Content-Disposition': asDownload
+            ? `attachment; filename="track.mp3"; filename*=UTF-8''${encodeURIComponent(filename)}`
+            : 'inline',
         },
         bytes.subarray(range.start, range.end + 1),
       );
@@ -573,6 +716,8 @@ async function handleRequest(request: ParsedRequest, pin: string, clientIp: stri
     }
     const single = request.query.get('filename');
     if (single) filenames.push(decodeFilenameParam(single));
+    if (!deleteGrantFor(accessToken).granted) return needDeleteGrant();
+    keepInTrash(musicDir(), 'music', filenames);
     const deleted = await deleteTracksByFilenames(filenames);
     return httpResponse(
       200,
@@ -601,6 +746,8 @@ async function handleRequest(request: ParsedRequest, pin: string, clientIp: stri
     } catch {
       filenames = [];
     }
+    if (!deleteGrantFor(accessToken).granted) return needDeleteGrant();
+    keepInTrash(documentsDir(), 'files', filenames);
     const deleted = deleteDocuments(filenames);
     return httpResponse(
       200,
@@ -640,18 +787,34 @@ async function handleRequest(request: ParsedRequest, pin: string, clientIp: stri
         Buffer.alloc(0),
       );
     }
+    const docHeaders: HeaderMap = {
+      'Content-Type': contentTypeForFilename(file.name),
+      'Content-Disposition': asDownload
+        ? `attachment; filename="${safeName}"; filename*=UTF-8''${encodeURIComponent(file.name)}`
+        : 'inline',
+    };
+    const docRangeHeader = headerValue(request.headers, 'range');
+    if (docRangeHeader) {
+      // resume support (API v2): the dashboard continues an interrupted download from its .part size
+      const range = parseByteRange(docRangeHeader, size);
+      if (!range) {
+        return httpResponse(
+          416,
+          'Range Not Satisfiable',
+          { 'Content-Type': 'text/plain', 'Content-Range': `bytes */${size}` },
+          'Range not satisfiable',
+        );
+      }
+      docHeaders['Content-Range'] = `bytes ${range.start}-${range.end}/${size}`;
+      return {
+        head: httpHead(206, 'Partial Content', docHeaders, range.end - range.start + 1),
+        uri: file.uri,
+        start: range.start,
+        end: range.end,
+      };
+    }
     return {
-      head: httpHead(
-        200,
-        'OK',
-        {
-          'Content-Type': contentTypeForFilename(file.name),
-          'Content-Disposition': asDownload
-            ? `attachment; filename="${safeName}"; filename*=UTF-8''${encodeURIComponent(file.name)}`
-            : 'inline',
-        },
-        size,
-      ),
+      head: httpHead(200, 'OK', docHeaders, size),
       uri: file.uri,
       start: 0,
       end: size - 1,
@@ -745,6 +908,7 @@ function attachSocket(socket: Socket, pin: string): void {
       body: buffer.slice(headerSize, headerSize + contentLength),
     };
 
+    inflight += 1;
     try {
       const response = await handleRequest(request, pin, normalizeClientIp(socket.remoteAddress));
       if (isStreamResult(response)) {
@@ -757,6 +921,7 @@ function attachSocket(socket: Socket, pin: string): void {
       const message = error instanceof Error ? error.message : 'Server error';
       await writeAll(socket, httpResponse(500, 'Internal Server Error', { 'Content-Type': 'text/plain' }, message));
     } finally {
+      inflight = Math.max(0, inflight - 1);
       socket.end();
     }
   };
@@ -783,36 +948,77 @@ export function getHostPin(): string {
   return currentPin;
 }
 
-export async function startLanServer(): Promise<string> {
-  if (server) {
+export type StartOptions = {
+  /** Auto-restart after the app returned to the foreground: keep the PIN and this share's sessions. */
+  resume?: boolean;
+  /** Bonjour/mDNS name (only advertised when the native kc-background module is in the build). */
+  bonjourName?: string;
+};
+
+export async function startLanServer(options: StartOptions = {}): Promise<string> {
+  purgeTrash();
+  if (server && !serverBroken) {
     return currentPin;
   }
-  resetLanAccess();
-  currentPin = String(Math.floor(1000 + Math.random() * 9000));
+  if (server && serverBroken) {
+    await stopLanServer({ keepSessions: true });
+  }
+  if (!options.resume) resetLanAccess();
+  currentPin = pinForStart(!!options.resume);
+  shareState = 'awake';
+  serverBroken = false;
   const pin = currentPin;
-  server = TcpSocket.createServer((socket) => {
+  const next = TcpSocket.createServer((socket) => {
     attachSocket(socket, pin);
   });
+  server = next;
 
-  await new Promise<void>((resolve, reject) => {
-    server?.once('error', reject);
-    server?.listen({ port: LAN_PORT, host: '0.0.0.0', reuseAddress: true }, () => {
-      resolve();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      next.once('error', reject);
+      next.listen({ port: LAN_PORT, host: '0.0.0.0', reuseAddress: true }, () => {
+        resolve();
+      });
     });
+  } catch (error) {
+    server = null;
+    currentPin = '';
+    throw error;
+  }
+  next.on('error', () => {
+    if (server !== next) return;
+    serverBroken = true;
+    notifyServer();
   });
-
+  next.on('close', () => {
+    if (server !== next) return;
+    serverBroken = true;
+    notifyServer();
+  });
+  publishBonjour(options.bonjourName || 'Music Player', LAN_PORT, { id: getDeviceId(), api: String(LAN_API_VERSION) });
+  notifyServer();
   return pin;
 }
 
-export async function stopLanServer(): Promise<void> {
+export type StopOptions = {
+  /** Going to sleep (background): keep sessions so the same pairing works after the auto-restart. */
+  keepSessions?: boolean;
+};
+
+export async function stopLanServer(options: StopOptions = {}): Promise<void> {
   const active = server;
   server = null;
   currentPin = '';
-  resetLanAccess();
+  shareState = 'awake';
+  serverBroken = false;
+  if (!options.keepSessions) resetLanAccess();
+  unpublishBonjour();
   for (const socket of activeSockets) {
     socket.destroy();
   }
   activeSockets.clear();
+  inflight = 0;
+  notifyServer();
   if (!active) return;
   await new Promise<void>((resolve) => {
     active.close(() => resolve());

@@ -1,8 +1,6 @@
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as Clipboard from 'expo-clipboard';
-import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
-import * as Network from 'expo-network';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -28,16 +26,8 @@ import {
   normalizeHostInput,
   parseJoinPayload,
 } from '@/lib/lan-client';
-import { LAN_PORT, startLanServer, stopLanServer } from '@/lib/lan-server';
-import {
-  disconnectClient,
-  getConnectedClients,
-  getPendingAccessClients,
-  resolveAccessRequest,
-  subscribeLanAccess,
-  type AccessClient,
-} from '@/lib/lan-access';
-import { ensurePhotoPermission } from '@/lib/photos';
+import { LAN_PORT } from '@/lib/lan-server';
+import { useSharing } from '@/lib/sharing-context';
 import type { RemoteTrack } from '@/lib/types';
 
 type Mode = 'host' | 'join';
@@ -46,88 +36,26 @@ export default function TransferScreen() {
   const insets = useSafeAreaInsets();
   const theme = useTheme();
   const [mode, setMode] = useState<Mode>('host');
-  const [hosting, setHosting] = useState(false);
+  const sharing = useSharing();
+  const hosting = sharing.phase !== 'off' && sharing.phase !== 'starting';
+  const { pin, ip, shareUrl, connected } = sharing;
   const [busy, setBusy] = useState(false);
-  const [pin, setPin] = useState('');
-  const [ip, setIp] = useState('');
-  const [shareUrl, setShareUrl] = useState('');
   const [joinHost, setJoinHost] = useState('');
   const [joinPin, setJoinPin] = useState('');
   const [remoteTracks, setRemoteTracks] = useState<RemoteTrack[]>([]);
   const [status, setStatus] = useState('');
   const [scanning, setScanning] = useState(false);
   const [permission, requestPermission] = useCameraPermissions();
-  const [connected, setConnected] = useState<AccessClient[]>([]);
 
-  useEffect(() => {
-    if (!hosting) {
-      setConnected([]);
-      return;
-    }
-    let lastPromptedId = '';
-    const sync = () => {
-      setConnected(getConnectedClients());
-      const next = getPendingAccessClients()[0];
-      if (!next || next.id === lastPromptedId) return;
-      lastPromptedId = next.id;
-      Alert.alert(
-        'Permission',
-        `${next.ip} requests connection?`,
-        [
-          {
-            text: 'Decline',
-            style: 'cancel',
-            onPress: () => {
-              resolveAccessRequest(next.id, false);
-            },
-          },
-          {
-            text: 'Accept',
-            onPress: () => {
-              resolveAccessRequest(next.id, true);
-            },
-          },
-        ],
-        { cancelable: false },
-      );
-    };
-    sync();
-    return subscribeLanAccess(sync);
-  }, [hosting]);
-
-  const startHost = async () => {
-    setBusy(true);
+  // Sharing lives in SharingProvider (app level): it keeps running on other tabs and while music plays when
+  // the phone is locked; access prompts are shown from there too.
+  const startHost = () => {
     setStatus('');
-    try {
-      const photosOk = await ensurePhotoPermission();
-      const nextPin = await startLanServer();
-      const address = await Network.getIpAddressAsync();
-      const url = `${hostBaseUrl(address, LAN_PORT)}?pin=${nextPin}`;
-      setPin(nextPin);
-      setIp(address);
-      setShareUrl(url);
-      setHosting(true);
-      await activateKeepAwakeAsync('lan-host');
-      if (!photosOk) {
-        setStatus('Sharing started. Allow Photos access to browse photos and videos from the browser.');
-      }
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : 'Could not start sharing');
-    } finally {
-      setBusy(false);
-    }
+    void sharing.start();
   };
 
-  const stopHost = async () => {
-    setBusy(true);
-    try {
-      await stopLanServer();
-      await deactivateKeepAwake('lan-host');
-      setHosting(false);
-      setShareUrl('');
-    } finally {
-      setBusy(false);
-    }
+  const stopHost = () => {
+    void sharing.stop();
   };
 
   const copyUrl = async () => {
@@ -233,6 +161,13 @@ export default function TransferScreen() {
             </ThemedText>
             {hosting ? (
               <>
+                <ThemedText type="small" themeColor="textSecondary">
+                  {sharing.phase === 'on'
+                    ? '分享中 — keeps running on other tabs. Stop it with the Stop button here or in the top pill.'
+                    : sharing.phase === 'sleeping'
+                      ? '休眠中 — finishing transfers before iOS pauses the app.'
+                      : '已暂停 — resumes automatically (same PIN) now that the app is open.'}
+                </ThemedText>
                 <ThemedText type="small">
                   URL: {shareUrl || `http://${ip}:${LAN_PORT}`}
                 </ThemedText>
@@ -252,23 +187,26 @@ export default function TransferScreen() {
                   connected.map((client) => (
                     <View key={client.id} style={styles.remoteRow}>
                       <View style={styles.flex}>
-                        <ThemedText type="small">{client.ip}</ThemedText>
+                        <ThemedText type="small">{client.name || client.ip}</ThemedText>
                         <ThemedText type="small" themeColor="textSecondary">
-                          Browser
+                          {client.paired ? `Paired · ${client.ip}` : `Browser · ${client.ip}`}
                         </ThemedText>
                       </View>
                       <AppButton
                         label="Disconnect"
                         variant="danger"
-                        onPress={() => disconnectClient(client.id)}
+                        onPress={() => sharing.disconnect(client.id)}
                       />
                     </View>
                   ))
                 )}
-                <AppButton label="Stop sharing" variant="danger" onPress={() => void stopHost()} />
+                <AppButton label="Stop sharing" variant="danger" onPress={stopHost} />
               </>
             ) : (
-              <AppButton label={busy ? 'Starting…' : 'Start sharing'} onPress={() => void startHost()} />
+              <AppButton
+                label={sharing.phase === 'starting' ? 'Starting…' : 'Start sharing'}
+                onPress={startHost}
+              />
             )}
           </ThemedView>
         ) : (
@@ -331,12 +269,14 @@ export default function TransferScreen() {
           <ThemedText type="smallBold">Same Wi-Fi only</ThemedText>
           <ThemedText type="small" themeColor="textSecondary">
             Both devices must be on the same network (guest Wi-Fi with client isolation will fail).
-            Keep this app in the foreground while hosting — iOS pauses the server in the background.
+            Sharing keeps running on every tab. With the phone locked it stays on while music is playing
+            (or with Settings → 锁屏保持连接 on). Otherwise it finishes running transfers, pauses, and
+            restarts with the same PIN when you open the app — a paired dashboard reconnects by itself.
             Large files can take a while.
           </ThemedText>
-          {status ? (
+          {status || sharing.error ? (
             <ThemedText type="small" style={styles.status}>
-              {status}
+              {status || sharing.error}
             </ThemedText>
           ) : null}
           {busy ? <ActivityIndicator color="#3c87f7" /> : null}

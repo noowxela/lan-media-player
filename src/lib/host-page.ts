@@ -934,6 +934,25 @@ export function hostPageHtml(pin: string, access = ''): string {
     function authQ() {
       return 'pin=' + encodeURIComponent(pin) + '&access=' + encodeURIComponent(access);
     }
+    // Music / Documents deletes need ONE "Allow deletes" tap on the phone per connection (grant lasts until
+    // 30 min without contact). First delete: ask the phone, wait for the tap, then retry; later deletes go straight through.
+    async function deleteWithGrant(path, names) {
+      async function send() {
+        return fetch(path + '?' + authQ(), { method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, headers), body: JSON.stringify({ filenames: names }) });
+      }
+      var res = await send();
+      if (res.status !== 403) return res;
+      var ask = await fetch('/api/delete-grant?' + authQ(), { method: 'POST', headers: Object.assign({ 'X-Client-Name': 'Browser' }, headers) });
+      var g = {};
+      try { g = await ask.json(); } catch (e) {}
+      var t0 = Date.now();
+      while (!g.granted && g.id && Date.now() - t0 < 120000) {
+        await new Promise(function (r) { setTimeout(r, 1000); });
+        try { g = Object.assign({ id: g.id }, await (await fetch('/api/delete-grant?id=' + encodeURIComponent(g.id) + '&' + authQ(), { headers: headers })).json()); } catch (e) {}
+        if (g.request === 'denied') break;
+      }
+      return g.granted ? send() : res;
+    }
     const uploadButton = document.getElementById('upload');
     const fileInput = document.getElementById('file');
     const homeFileInput = document.getElementById('home-file');
@@ -1684,11 +1703,7 @@ export function hostPageHtml(pin: string, access = ''): string {
       var names = selectedDocNames();
       if (!names.length) return;
       if (!confirm('Delete ' + names.length + ' selected ' + (names.length === 1 ? 'file' : 'files') + ' from the phone?')) return;
-      var res = await fetch('/api/documents/delete?' + authQ(), {
-        method: 'POST',
-        headers: Object.assign({ 'Content-Type': 'application/json' }, headers),
-        body: JSON.stringify({ filenames: names })
-      });
+      var res = await deleteWithGrant('/api/documents/delete', names);
       var data = {};
       try { data = await res.json(); } catch (e) {}
       if (!res.ok || !data.ok) {
@@ -1712,11 +1727,7 @@ export function hostPageHtml(pin: string, access = ''): string {
       var names = selectedNames();
       if (!names.length) return;
       if (!confirm('Delete ' + names.length + ' selected ' + (names.length === 1 ? 'track' : 'tracks') + ' from the phone?')) return;
-      var res = await fetch('/api/delete?' + authQ(), {
-        method: 'POST',
-        headers: Object.assign({ 'Content-Type': 'application/json' }, headers),
-        body: JSON.stringify({ filenames: names })
-      });
+      var res = await deleteWithGrant('/api/delete', names);
       var data = {};
       try { data = await res.json(); } catch (e) {}
       if (!res.ok || !data.ok) {

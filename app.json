@@ -2,7 +2,7 @@
   "expo": {
     "name": "Music Player",
     "slug": "musicPlayer",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "musicplayer",
@@ -10,8 +10,12 @@
     "ios": {
       "icon": "./assets/expo.icon",
       "bundleIdentifier": "com.alexwoon.musicplayer",
+      "buildNumber": "2",
       "infoPlist": {
         "NSLocalNetworkUsageDescription": "This app uses the local network to send and receive MP3 files on the same Wi-Fi.",
+        "NSBonjourServices": [
+          "_kcphone._tcp"
+        ],
         "NSAppTransportSecurity": {
           "NSAllowsLocalNetworking": true
         },
@@ -25,6 +29,7 @@
     },
     "android": {
       "package": "com.alexwoon.musicplayer",
+      "versionCode": 2,
       "adaptiveIcon": {
         "backgroundColor": "#111114",
         "foregroundImage": "./assets/images/android-icon-foreground.png",

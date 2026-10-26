@@ -57,8 +57,8 @@ flowchart LR
 
 - Playback state: `src/lib/player-context.tsx` (`MusicProvider` in `src/app/_layout.tsx`). Incoming LAN MP3 uploads notify the player via `subscribeIncomingUploads`.
 - Host HTML/JS is a template string in `src/lib/host-page.ts` (plus PIN error / waiting pages).
-- Access: PIN on the URL; new clients wait until the phone **Accept**s. Reload after leaving the LAN page can reconnect without a second prompt. **Disconnect** on the phone requires Accept again. PIN changes each time sharing starts.
-- The HTTP server lives in the JS process. **Transfer must stay open** while sharing. Stop sharing drops every browser session.
+- Access: PIN on the URL; new clients wait until the phone **Accept**s. Every data endpoint needs the access token (PIN alone is not enough, since SDD 001). Clients that send `X-Pair: 1` (Knowledge Dashboard) are remembered in `Documents/.lan-pairing.json` and reconnect without PIN or Accept. **Disconnect** on the phone forgets the pairing. The PIN changes per manual start unless Settings → Fixed PIN is on.
+- The HTTP server lives in the JS process, owned by `SharingProvider` (`src/lib/sharing-context.tsx`), so it keeps running on every tab. Locked with music playing (or 锁屏保持连接 on) it keeps serving. Otherwise it drains, pauses, and restarts with the same PIN when the app is opened (see SDD 001).
 
 ## Pros
 
@@ -69,8 +69,8 @@ flowchart LR
 ## Cons / risks
 
 - Guest Wi-Fi that isolates clients will fail.
-- No HTTPS / Bonjour; HTTP on the LAN only (`NSAllowsLocalNetworking`).
-- Share dies if the Transfer screen is left or the JS runtime suspends.
+- No HTTPS; HTTP on the LAN only (`NSAllowsLocalNetworking`). Bonjour `_kcphone._tcp` via the local `modules/kc-background` module.
+- Locked without audio, iOS still suspends the app: the share pauses until the app is opened (SDD 001).
 - Giant `host-page.ts` / `lan-server.ts` files; edits to LAN UI collide easily.
 - iOS Photos permission is required for photo/video share; deleting from the LAN page can delete library assets.
 

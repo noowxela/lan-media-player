@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from 'react';
-import { Alert, FlatList, Pressable, StyleSheet, View } from 'react-native';
+import { FlatList, Pressable, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AppButton } from '@/components/app-button';
@@ -7,6 +7,7 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { BottomTabInset, MaxContentWidth, Spacing } from '@/constants/theme';
 import { formatTime } from '@/lib/format';
+import { confirmLocalDelete } from '@/lib/local-delete-confirm';
 import { useMusic } from '@/lib/player-context';
 import type { Track } from '@/lib/types';
 import { useTheme } from '@/hooks/use-theme';
@@ -44,35 +45,17 @@ export default function LibraryScreen() {
   }, [tracks]);
 
   const onDeleteOne = (track: Track) => {
-    Alert.alert('Remove track', `Delete ${track.title}?`, [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Delete',
-        style: 'destructive',
-        onPress: () => {
-          void deleteTrack(track.id);
-        },
-      },
-    ]);
+    confirmLocalDelete('Remove track', `Delete ${track.title}?`, () => {
+      void deleteTrack(track.id);
+    });
   };
 
   const onDeleteSelected = () => {
     const count = selectedCount;
     if (count === 0) return;
-    Alert.alert(
-      'Delete tracks',
-      `Delete ${count} ${count === 1 ? 'track' : 'tracks'}? This cannot be undone.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: () => {
-            void deleteTracks([...selected]).then(exitSelectMode);
-          },
-        },
-      ],
-    );
+    confirmLocalDelete('Delete tracks', `Delete ${count} ${count === 1 ? 'track' : 'tracks'}? This cannot be undone.`, () => {
+      void deleteTracks([...selected]).then(exitSelectMode);
+    });
   };
 
   const headerActions = useMemo(() => {
